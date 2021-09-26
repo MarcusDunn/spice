@@ -8,3 +8,5 @@ edition = "2018"
 [dependencies]
 portable-pty = "0.4"
 anyhow = "1.0.44"
+syntect = "4.6.0"
+crossterm  = "0.21.0"
