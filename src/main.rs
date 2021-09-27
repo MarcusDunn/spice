@@ -5,7 +5,7 @@ use std::thread::{sleep, JoinHandle};
 use std::time::Duration;
 
 use crossterm::terminal;
-use crossterm::terminal::{Clear, ClearType};
+use crossterm::terminal::ClearType;
 use portable_pty::{CommandBuilder, PtyPair, PtySize};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -80,11 +80,9 @@ fn main() -> Result<(), anyhow::Error> {
 fn highlight(ps: &SyntaxSet, ts: &ThemeSet, input: String) -> String {
     let syntax = ps.find_syntax_by_extension("py").unwrap();
     let mut h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
-    for line in LinesWithEndings::from(&*input) {
-        let ranges = h.highlight(line, &ps);
-        return as_24_bit_terminal_escaped(&ranges[..], true);
-    }
-    todo!()
+    let line = LinesWithEndings::from(&*input).next().unwrap();
+    let ranges = h.highlight(line, &ps);
+    as_24_bit_terminal_escaped(&ranges[..], true)
 }
 
 fn spawn_background_reader(
