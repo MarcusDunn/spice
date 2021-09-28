@@ -25,6 +25,13 @@ fn main() -> Result<(), anyhow::Error> {
     let ts = ThemeSet::load_defaults();
 
     if let [_spice, repl, args @ ..] = &std::env::args().collect::<Vec<_>>()[..] {
+        let ext = if repl == "python" {
+            "py"
+        } else if repl == "lein" {
+            "clj"
+        } else {
+            "hs"
+        };
         let mut repl = CommandBuilder::new(repl);
         repl.args(args);
         let mut child = slave.spawn_command(repl)?;
@@ -67,13 +74,11 @@ fn main() -> Result<(), anyhow::Error> {
                             current_line.push(c);
                         }
                         current_line = current_line.replace("\x1b[K", "");
-                        writeln!(std::io::stderr(), "{:?}", &current_line)?;
-                        let string = highlight(&ps, &ts, current_line.clone());
+                        let string = highlight(&ps, &ts, current_line.clone(), ext);
                         writeln!(stdout, "{}", string)?;
                     }
                 }
                 while let Ok(c) = stdin_rx.try_recv() {
-                    eprintln!("{:?}", c);
                     master.write_all(&[c])?;
                 }
                 stdout.flush()?;
@@ -87,8 +92,8 @@ fn main() -> Result<(), anyhow::Error> {
     }
 }
 
-fn highlight(ps: &SyntaxSet, ts: &ThemeSet, input: String) -> String {
-    let syntax = ps.find_syntax_by_extension("py").unwrap();
+fn highlight(ps: &SyntaxSet, ts: &ThemeSet, input: String, ext: &str) -> String {
+    let syntax = ps.find_syntax_by_extension(ext).unwrap();
     let mut h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
     let line = LinesWithEndings::from(&*input).next().unwrap();
     let ranges = h.highlight(line, ps);
