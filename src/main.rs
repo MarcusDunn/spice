@@ -61,7 +61,12 @@ fn main() -> Result<(), anyhow::Error> {
                             crossterm::terminal::Clear(ClearType::CurrentLine)
                         )?;
                         stdout.flush()?;
-                        current_line.push(c);
+                        if c == '\x08' {
+                            current_line.remove(current_line.len() - 1);
+                        } else {
+                            current_line.push(c);
+                        }
+                        current_line = current_line.replace("\x1b[K", "");
                         writeln!(std::io::stderr(), "{:?}", &current_line)?;
                         let string = highlight(&ps, &ts, current_line.clone());
                         writeln!(stdout, "{}", string)?;
