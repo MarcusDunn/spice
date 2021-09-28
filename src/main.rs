@@ -7,6 +7,8 @@ use std::time::Duration;
 use crossterm::terminal;
 use crossterm::terminal::ClearType;
 use portable_pty::{CommandBuilder, PtyPair, PtySize};
+use std::convert::TryFrom;
+use std::iter::FromIterator;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -60,10 +62,13 @@ fn main() -> Result<(), anyhow::Error> {
                         )?;
                         stdout.flush()?;
                         current_line.push(c);
-                        writeln!(stdout, "{}", highlight(&ps, &ts, current_line.clone()))?;
+                        writeln!(std::io::stderr(), "{:?}", &current_line)?;
+                        let string = highlight(&ps, &ts, current_line.clone());
+                        writeln!(stdout, "{}", string)?;
                     }
                 }
                 while let Ok(c) = stdin_rx.try_recv() {
+                    eprintln!("{:?}", c);
                     master.write_all(&[c])?;
                 }
                 stdout.flush()?;
@@ -81,7 +86,7 @@ fn highlight(ps: &SyntaxSet, ts: &ThemeSet, input: String) -> String {
     let syntax = ps.find_syntax_by_extension("py").unwrap();
     let mut h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
     let line = LinesWithEndings::from(&*input).next().unwrap();
-    let ranges = h.highlight(line, &ps);
+    let ranges = h.highlight(line, ps);
     as_24_bit_terminal_escaped(&ranges[..], true)
 }
 
