@@ -5,7 +5,7 @@ Spice your REPL with syntax highlighting.
 - [ ] zero overhead
 - [ ] configurable syntax highlighting
 - [ ] completly agnostist of the target REPL
-- [ ] `spice <repl> [args]` should behave the exact same as `<repl> [args]`
+- [ ] `spice <repl> [args]` should behave the exact same as `<repl> [args]` but with colors!
 - [ ] Auto detect all REPLs that are for a language supported by [syntect](https://github.com/trishume/syntect)
 - [ ] allow people to still use this with configuration even if you launch `python` with `ghci`
 
