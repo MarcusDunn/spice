@@ -1,4 +1,4 @@
-use crossterm::cursor::{MoveToPreviousLine, MoveUp};
+use crossterm::cursor::{MoveLeft, MoveToPreviousLine, MoveUp};
 use crossterm::style::Print;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
@@ -45,10 +45,8 @@ impl<T: Write> Line<'_, T> {
     }
 }
 
-impl<T: Write> Perform for Line<'_, T> {
-    fn print(&mut self, c: char) {
-        self.inner.insert(self.cursor_pos, c);
-        self.cursor_pos += 1;
+impl<T: Write> Line<'_, T> {
+    fn print_highlighted(&mut self) {
         let string = self.inner.clone();
         let highlighted = self
             .highlighter
@@ -63,31 +61,23 @@ impl<T: Write> Perform for Line<'_, T> {
         )
         .unwrap();
     }
+}
+
+impl<T: Write> Perform for Line<'_, T> {
+    fn print(&mut self, c: char) {
+        self.inner.insert(self.cursor_pos, c);
+        self.cursor_pos += 1;
+        self.print_highlighted();
+    }
 
     fn execute(&mut self, byte: u8) {
         if char::from(byte) == '\n' {
             queue!(&mut self.stdout, Print("\n")).unwrap();
             self.inner.clear();
         } else if char::from(byte) == '\r' {
-            queue!(&mut self.stdout, Print('\r')).unwrap();
             self.cursor_pos = 0;
         } else if char::from(byte) == '\x08' {
-            if self.cursor_pos == self.inner.len() {
-                self.inner.pop();
-            } else {
-                self.inner.remove(self.cursor_pos);
-            }
             self.cursor_pos -= 1;
-            let x = self.inner.clone();
-            queue!(
-                &mut self.stdout,
-                MoveToPreviousLine(2),
-                Clear(ClearType::CurrentLine),
-                Print(x),
-                Print("\n"),
-                MoveToPreviousLine(1),
-            )
-            .unwrap()
         }
     }
 
@@ -124,7 +114,14 @@ impl<T: Write> Perform for Line<'_, T> {
             )
         };
         match _action {
-            'K' => {}
+            'K' => {
+                if self.cursor_pos == self.inner.len() {
+                    self.inner.pop();
+                } else {
+                    self.inner.remove(self.cursor_pos);
+                }
+                self.print_highlighted();
+            }
             _ => todo(),
         }
     }
