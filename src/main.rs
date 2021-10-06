@@ -1,103 +1,202 @@
-use std::io::{stdin, stdout, BufReader, Write};
-use std::sync::mpsc::{channel, Sender};
+use crossterm::cursor::{MoveToPreviousLine, MoveUp};
+use crossterm::style::Print;
+use crossterm::terminal::Clear;
+use crossterm::terminal::ClearType;
+use crossterm::{queue, terminal};
+use portable_pty::{CommandBuilder, MasterPty, PtyPair, PtySize};
+use std::io::{stdin, stdout, BufReader, Stdin, Write};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::thread::{sleep, JoinHandle};
 use std::time::Duration;
-
-use crossterm::terminal;
-use crossterm::terminal::ClearType;
-use portable_pty::{CommandBuilder, PtyPair, PtySize};
-use std::convert::TryFrom;
-use std::iter::FromIterator;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
-use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+use syntect::highlighting::{Highlighter, Theme, ThemeSet};
+use syntect::parsing::{SyntaxSet, SyntaxSetBuilder};
+use vte::{Params, Parser, Perform};
+
+/// a single line of input as well as the state of a cursor.
+struct Line<'a, T: Write> {
+    /// the current line
+    inner: String,
+    /// the position of the cursor
+    cursor_pos: usize,
+    /// where to flush [inner] on newline
+    stdout: T,
+    highlighter: HighlightLines<'a>,
+    syntax_set: SyntaxSet,
+}
+
+impl<'a, T: Write> Line<'a, T> {
+    fn new(stdout: T, highlighter: HighlightLines<'a>, syntax_set: SyntaxSet) -> Line<T> {
+        Line {
+            inner: String::new(),
+            cursor_pos: 0,
+            stdout,
+            highlighter,
+            syntax_set,
+        }
+    }
+}
+
+impl<T: Write> Line<'_, T> {
+    /// deletes the previous line
+    pub(crate) fn flush(&mut self) {
+        self.stdout.flush().unwrap();
+    }
+}
+
+impl<T: Write> Perform for Line<'_, T> {
+    fn print(&mut self, c: char) {
+        self.inner.insert(self.cursor_pos, c);
+        self.cursor_pos += 1;
+        let string = self.inner.clone();
+        let highlighted = self
+            .highlighter
+            .highlight(string.as_str(), &self.syntax_set);
+        let yeet = syntect::util::as_24_bit_terminal_escaped(&highlighted[..], false);
+        queue!(
+            &mut self.stdout,
+            MoveToPreviousLine(1),
+            Clear(ClearType::CurrentLine),
+            Print(yeet),
+            Print("\n")
+        )
+        .unwrap();
+    }
+
+    fn execute(&mut self, byte: u8) {
+        if char::from(byte) == '\n' {
+            queue!(&mut self.stdout, Print("\n")).unwrap();
+            self.inner.clear();
+        } else if char::from(byte) == '\r' {
+            queue!(&mut self.stdout, Print('\r')).unwrap();
+            self.cursor_pos = 0;
+        } else if char::from(byte) == '\x08' {
+            if self.cursor_pos == self.inner.len() {
+                self.inner.pop();
+            } else {
+                self.inner.remove(self.cursor_pos);
+            }
+            self.cursor_pos -= 1;
+            let x = self.inner.clone();
+            queue!(
+                &mut self.stdout,
+                MoveToPreviousLine(2),
+                Clear(ClearType::CurrentLine),
+                Print(x),
+                Print("\n"),
+                MoveToPreviousLine(1),
+            )
+            .unwrap()
+        }
+    }
+
+    fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _action: char) {
+        todo!("hook")
+    }
+
+    fn put(&mut self, _byte: u8) {
+        todo!("put")
+    }
+
+    fn unhook(&mut self) {
+        todo!("unhook")
+    }
+
+    fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {
+        todo!("osc_dispatch")
+    }
+
+    fn csi_dispatch(
+        &mut self,
+        _params: &Params,
+        _intermediates: &[u8],
+        _ignore: bool,
+        _action: char,
+    ) {
+        let todo = || {
+            todo!(
+                "csi_dispatch: _params: {:?} _intermediates: {:?} _ignore: {:?} _action: {:?}",
+                _params,
+                _intermediates,
+                _ignore,
+                _action
+            )
+        };
+        match _action {
+            'K' => {}
+            _ => todo(),
+        }
+    }
+
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {
+        todo!("esc_dispatch")
+    }
+}
 
 fn main() -> Result<(), anyhow::Error> {
-    let mut stdout = stdout();
+    println!();
+    let stdout = stdout();
+    let stdout = stdout.lock();
     let stdin = stdin();
 
-    let PtyPair { slave, mut master } =
-        portable_pty::native_pty_system().openpty(PtySize::default())?;
+    let mut state_machine = Parser::new();
 
-    let ps = SyntaxSet::load_defaults_newlines();
+    let set = SyntaxSet::load_defaults_nonewlines();
+    let ss = set
+        .find_syntax_by_extension("py")
+        .expect("failed to make syntax set");
     let ts = ThemeSet::load_defaults();
 
+    let highlightlines = syntect::easy::HighlightLines::new(ss, &ts.themes["base16-ocean.dark"]);
+
+    let mut performer = Line::new(stdout, highlightlines, set);
+
     if let [_spice, repl, args @ ..] = &std::env::args().collect::<Vec<_>>()[..] {
-        let ext = if repl == "python" {
-            "py"
-        } else if repl == "lein" {
-            "clj"
-        } else {
-            "hs"
-        };
+        let PtyPair { slave, mut master } =
+            portable_pty::native_pty_system().openpty(PtySize::default())?;
+
         let mut repl = CommandBuilder::new(repl);
         repl.args(args);
         let mut child = slave.spawn_command(repl)?;
 
-        let master_buf_reader = BufReader::new(master.try_clone_reader()?);
-        let stdin_buf_reader = BufReader::new(stdin);
-
-        let (master_tx, master_rx) = channel::<u8>();
-        let (stdin_tx, stdin_rx) = channel::<u8>();
-
-        spawn_background_reader(master_tx, master_buf_reader);
-        spawn_background_reader(stdin_tx, stdin_buf_reader);
+        let (master_rx, stdin_rx) = spawn_repl(stdin, &mut master);
 
         terminal::enable_raw_mode()?;
 
-        let mut current_line = String::new();
-
         loop {
-            if let Some(exit_code) = child.try_wait()? {
-                write!(stdout, "child exited with {:?}", exit_code)?;
-                terminal::disable_raw_mode()?;
+            if child.try_wait()?.is_some() {
                 break;
             } else {
                 while let Ok(c) = master_rx.try_recv() {
-                    let c = char::from(c);
-
-                    if c == '\n' {
-                        current_line.clear();
-                        writeln!(stdout)?;
-                    } else {
-                        crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(1))?;
-                        crossterm::queue!(
-                            stdout,
-                            crossterm::terminal::Clear(ClearType::CurrentLine)
-                        )?;
-                        stdout.flush()?;
-                        if c == '\x08' {
-                            current_line.remove(current_line.len() - 1);
-                        } else {
-                            current_line.push(c);
-                        }
-                        current_line = current_line.replace("\x1b[K", "");
-                        let string = highlight(&ps, &ts, current_line.clone(), ext);
-                        writeln!(stdout, "{}", string)?;
-                    }
+                    state_machine.advance(&mut performer, c);
                 }
-                while let Ok(c) = stdin_rx.try_recv() {
-                    master.write_all(&[c])?;
-                }
-                stdout.flush()?;
-                sleep(Duration::from_millis(50))
             }
+            while let Ok(c) = stdin_rx.try_recv() {
+                master.write_all(&[c])?;
+            }
+            performer.flush();
+            sleep(Duration::from_millis(50))
         }
-
         Ok(())
     } else {
         todo!()
     }
 }
 
-fn highlight(ps: &SyntaxSet, ts: &ThemeSet, input: String, ext: &str) -> String {
-    let syntax = ps.find_syntax_by_extension(ext).unwrap();
-    let mut h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
-    let line = LinesWithEndings::from(&*input).next().unwrap();
-    let ranges = h.highlight(line, ps);
-    as_24_bit_terminal_escaped(&ranges[..], true)
+fn spawn_repl(
+    stdin: Stdin,
+    master: &mut Box<dyn MasterPty + Send>,
+) -> (Receiver<u8>, Receiver<u8>) {
+    let master_buf_reader = BufReader::new(master.try_clone_reader().unwrap());
+    let stdin_buf_reader = BufReader::new(stdin);
+
+    let (master_tx, master_rx) = channel();
+    let (stdin_tx, stdin_rx) = channel();
+
+    spawn_background_reader(master_tx, master_buf_reader);
+    spawn_background_reader(stdin_tx, stdin_buf_reader);
+    (master_rx, stdin_rx)
 }
 
 fn spawn_background_reader(
@@ -105,7 +204,7 @@ fn spawn_background_reader(
     mut stdin_buf_reader: impl std::io::Read + Send + 'static,
 ) -> JoinHandle<()> {
     thread::spawn(move || loop {
-        let mut buf = [0u8];
+        let mut buf = [0; 1];
         stdin_buf_reader
             .read_exact(&mut buf)
             .expect("failed to read byte");

@@ -10,3 +10,4 @@ portable-pty = "0.4"
 anyhow = "1.0.44"
 syntect = { version = "4.6.0", default-features = false, features = ["default-fancy"] }
 crossterm = "0.21.0"
+vte = "0.10.1"
