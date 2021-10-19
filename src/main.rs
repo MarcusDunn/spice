@@ -1,135 +1,17 @@
-use crossterm::cursor::{MoveLeft, MoveToPreviousLine, MoveUp};
-use crossterm::style::Print;
-use crossterm::terminal::Clear;
-use crossterm::terminal::ClearType;
-use crossterm::{queue, terminal};
+use crate::line::Line;
+
+use crossterm::{terminal};
 use portable_pty::{CommandBuilder, MasterPty, PtyPair, PtySize};
 use std::io::{stdin, stdout, BufReader, Stdin, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::thread::{sleep, JoinHandle};
 use std::time::Duration;
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{Highlighter, Theme, ThemeSet};
-use syntect::parsing::{SyntaxSet, SyntaxSetBuilder};
-use vte::{Params, Parser, Perform};
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
+use vte::{Parser};
 
-/// a single line of input as well as the state of a cursor.
-struct Line<'a, T: Write> {
-    /// the current line
-    inner: String,
-    /// the position of the cursor
-    cursor_pos: usize,
-    /// where to flush [inner] on newline
-    stdout: T,
-    highlighter: HighlightLines<'a>,
-    syntax_set: SyntaxSet,
-}
-
-impl<'a, T: Write> Line<'a, T> {
-    fn new(stdout: T, highlighter: HighlightLines<'a>, syntax_set: SyntaxSet) -> Line<T> {
-        Line {
-            inner: String::new(),
-            cursor_pos: 0,
-            stdout,
-            highlighter,
-            syntax_set,
-        }
-    }
-}
-
-impl<T: Write> Line<'_, T> {
-    /// deletes the previous line
-    pub(crate) fn flush(&mut self) {
-        self.stdout.flush().unwrap();
-    }
-}
-
-impl<T: Write> Line<'_, T> {
-    fn print_highlighted(&mut self) {
-        let string = self.inner.clone();
-        let highlighted = self
-            .highlighter
-            .highlight(string.as_str(), &self.syntax_set);
-        let yeet = syntect::util::as_24_bit_terminal_escaped(&highlighted[..], false);
-        queue!(
-            &mut self.stdout,
-            MoveToPreviousLine(1),
-            Clear(ClearType::CurrentLine),
-            Print(yeet),
-            Print("\n")
-        )
-        .unwrap();
-    }
-}
-
-impl<T: Write> Perform for Line<'_, T> {
-    fn print(&mut self, c: char) {
-        self.inner.insert(self.cursor_pos, c);
-        self.cursor_pos += 1;
-        self.print_highlighted();
-    }
-
-    fn execute(&mut self, byte: u8) {
-        if char::from(byte) == '\n' {
-            queue!(&mut self.stdout, Print("\n")).unwrap();
-            self.inner.clear();
-        } else if char::from(byte) == '\r' {
-            self.cursor_pos = 0;
-        } else if char::from(byte) == '\x08' {
-            self.cursor_pos -= 1;
-        }
-    }
-
-    fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _action: char) {
-        todo!("hook")
-    }
-
-    fn put(&mut self, _byte: u8) {
-        todo!("put")
-    }
-
-    fn unhook(&mut self) {
-        todo!("unhook")
-    }
-
-    fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {
-        todo!("osc_dispatch")
-    }
-
-    fn csi_dispatch(
-        &mut self,
-        _params: &Params,
-        _intermediates: &[u8],
-        _ignore: bool,
-        _action: char,
-    ) {
-        let todo = || {
-            todo!(
-                "csi_dispatch: _params: {:?} _intermediates: {:?} _ignore: {:?} _action: {:?}",
-                _params,
-                _intermediates,
-                _ignore,
-                _action
-            )
-        };
-        match _action {
-            'K' => {
-                if self.cursor_pos == self.inner.len() {
-                    self.inner.pop();
-                } else {
-                    self.inner.remove(self.cursor_pos);
-                }
-                self.print_highlighted();
-            }
-            _ => todo(),
-        }
-    }
-
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {
-        todo!("esc_dispatch")
-    }
-}
+mod line;
 
 fn main() -> Result<(), anyhow::Error> {
     println!();
